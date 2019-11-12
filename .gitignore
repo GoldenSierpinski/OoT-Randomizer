@@ -5,6 +5,8 @@
 /Output
 /build
 /dist
+/Logs
+/__pychache__
 ARCHIVE.bin
 
 *.[nz]64
@@ -14,6 +16,9 @@ ARCHIVE.bin
 *.sav
 *.spec
 .*.sw*
+
+tests/Output
+!tests/*.sav
 
 # In order to keep this file tidy, please add any personal conventions to your
 # global git configuration.

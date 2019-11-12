@@ -1,5 +1,11 @@
 from collections import Counter, defaultdict
 import copy
+import itertools
+
+from Item import ItemInfo
+from Playthrough import Playthrough
+from Region import Region, TimeOfDay
+
 
 
 class State(object):
@@ -7,18 +13,13 @@ class State(object):
     def __init__(self, parent):
         self.prog_items = Counter()
         self.world = parent
-        self.region_cache = {}
-        self.location_cache = {}
-        self.entrance_cache = {}
-        self.recursion_count = 0
-        self.collected_locations = {}
+        self.playthrough = None
 
 
-    def clear_cached_unreachable(self):
-        # we only need to invalidate results which were False, places we could reach before we can still reach after adding more items
-        self.region_cache = {k: v for k, v in self.region_cache.items() if v}
-        self.location_cache = {k: v for k, v in self.location_cache.items() if v}
-        self.entrance_cache = {k: v for k, v in self.entrance_cache.items() if v}
+    ## Ensure that this will always have a value
+    @property
+    def is_glitched(self):
+        return self.world.logic_rules != 'glitchless'
 
 
     def copy(self, new_world=None):
@@ -26,56 +27,7 @@ class State(object):
             new_world = self.world
         new_state = State(new_world)
         new_state.prog_items = copy.copy(self.prog_items)
-        new_state.region_cache = copy.copy(self.region_cache)
-        new_state.location_cache = copy.copy(self.location_cache)
-        new_state.entrance_cache = copy.copy(self.entrance_cache)
-        new_state.collected_locations = copy.copy(self.collected_locations)
         return new_state
-
-
-    def can_reach(self, spot, resolution_hint=None):
-        try:
-            spot_type = spot.spot_type
-            if spot_type == 'Location':
-                correct_cache = self.location_cache
-            elif spot_type == 'Region':
-                correct_cache = self.region_cache
-            elif spot_type == 'Entrance':
-                correct_cache = self.entrance_cache
-            else:
-                raise AttributeError
-        except AttributeError:
-            # try to resolve a name
-            if resolution_hint == 'Location':
-                spot = self.world.get_location(spot)
-                correct_cache = self.location_cache
-            elif resolution_hint == 'Entrance':
-                spot = self.world.get_entrance(spot)
-                correct_cache = self.entrance_cache
-            else:
-                # default to Region
-                spot = self.world.get_region(spot)
-                correct_cache = self.region_cache
-
-        if spot.recursion_count > 0:
-            return False
-
-        if spot not in correct_cache:
-            # for the purpose of evaluating results, recursion is resolved by always denying recursive access (as that ia what we are trying to figure out right now in the first place
-            spot.recursion_count += 1
-            self.recursion_count += 1
-            can_reach = spot.can_reach(self)
-            spot.recursion_count -= 1
-            self.recursion_count -= 1
-
-            # we only store qualified false results (i.e. ones not inside a hypothetical)
-            if not can_reach:
-                if self.recursion_count == 0:
-                    correct_cache[spot] = can_reach
-            else:
-                correct_cache[spot] = can_reach
-            return can_reach
-        return correct_cache[spot]
 
 
     def item_name(self, location):
@@ -89,36 +41,49 @@ class State(object):
         return self.prog_items[item] >= count
 
 
+    def has_any_of(self, items):
+        return any(map(self.prog_items.__contains__, items))
+
+
+    def has_all_of(self, items):
+        return all(map(self.prog_items.__contains__, items))
+
+
     def item_count(self, item):
         return self.prog_items[item]
 
 
-    def is_adult(self):
-        return self.has('Master Sword')
+    def can_child_attack(self, age=None):
+        return  age == 'child' and \
+                   (self.has_slingshot() or \
+                    self.has('Boomerang') or \
+                    self.has_sticks() or \
+                    self.has_explosives() or \
+                    self.has('Kokiri Sword') or \
+                    self.can_use('Dins Fire'))
+
+    def can_child_damage(self, age=None):
+        return  age == 'child' and \
+                   (self.has_slingshot() or \
+                    self.has_sticks() or \
+                    self.has_explosives() or \
+                    self.has('Kokiri Sword') or \
+                    self.can_use('Dins Fire'))
 
 
-    def can_child_attack(self):
-        return  self.has_slingshot() or \
-                self.has('Boomerang') or \
-                self.has_sticks() or \
-                self.has_explosives() or \
-                self.has('Kokiri Sword') or \
-                (self.has('Dins Fire') and self.has('Magic Meter'))
-
-
-    def can_stun_deku(self):
-        return  self.is_adult() or \
-                self.can_child_attack() or \
+    def can_stun_deku(self, age=None):
+        return  age == 'adult' or \
+                self.can_child_attack(age=age) or \
                 self.has_nuts() or \
-                self.has('Buy Deku Shield')
+                self.can_use('Deku Shield', age=age)
 
 
     def has_nuts(self):
-        return self.has('Buy Deku Nut (5)') or self.has('Buy Deku Nut (10)') or self.has('Deku Nut Drop')
+        return self.has_any_of(('Buy Deku Nut (5)', 'Buy Deku Nut (10)', 'Deku Nut Drop'))
 
 
     def has_sticks(self):
-        return self.has('Buy Deku Stick (1)') or self.has('Deku Stick Drop')
+        return self.has_any_of(('Buy Deku Stick (1)', 'Deku Stick Drop'))
 
 
     def has_bow(self):
@@ -133,77 +98,78 @@ class State(object):
         return self.has('Bomb Bag')
 
 
-    def has_blue_fire(self):
-        return self.has_bottle() and \
-                (self.can_reach('Ice Cavern')
-                or self.can_reach('Ganons Castle Water Trial')
-                or self.has('Buy Blue Fire')
-                or (self.world.dungeon_mq['Gerudo Training Grounds'] and self.can_reach('Gerudo Training Grounds Stalfos Room')))
-
-
     def has_ocarina(self):
-        return (self.has('Ocarina') or self.has("Fairy Ocarina") or self.has("Ocarina of Time"))
+        return self.has_any_of(('Ocarina', 'Fairy Ocarina', 'Ocarina of Time'))
+
+
+    def can_plant_bean(self, age=None):
+        return age == 'child' and self.has_any_of(('Magic Bean', 'Magic Bean Pack'))
 
 
     def can_play(self, song):
         return self.has_ocarina() and self.has(song)
 
 
-    def can_use(self, item):
+    def can_use(self, item, age=None):
         magic_items = ['Dins Fire', 'Farores Wind', 'Nayrus Love', 'Lens of Truth']
-        adult_items = ['Bow', 'Hammer', 'Iron Boots', 'Hover Boots', 'Magic Bean']
+        adult_items = ['Bow', 'Hammer', 'Iron Boots', 'Hover Boots']
+        adult_buy_or_find = ['Goron Tunic', 'Zora Tunic']
+        child_items = ['Slingshot', 'Boomerang', 'Kokiri Sword']
         magic_arrows = ['Fire Arrows', 'Light Arrows']
         if item in magic_items:
-            return self.has(item) and self.has('Magic Meter')
+            return self.has_all_of((item, 'Magic Meter'))
+        elif item in child_items:
+            return age == 'child' and self.has(item)
+        elif item in adult_buy_or_find:
+            return age == 'adult' and self.has_any_of((item, 'Buy ' + item))
         elif item in adult_items:
-            return self.has(item) and self.is_adult()
+            return age == 'adult' and self.has(item)
         elif item in magic_arrows:
-            return self.has(item) and self.is_adult() and self.has_bow() and self.has('Magic Meter')
+            return age == 'adult' and self.has_all_of((item, 'Bow', 'Magic Meter'))
+        elif item == 'Sticks':
+            return age == 'child' and self.has_sticks()
+        elif item == 'Deku Shield':
+            return age == 'child' and self.has('Buy Deku Shield')
         elif item == 'Hookshot':
-            return self.has('Progressive Hookshot') and self.is_adult()
+            return age == 'adult' and self.has('Progressive Hookshot')
         elif item == 'Longshot':
-            return self.has('Progressive Hookshot', 2) and self.is_adult()
+            return age == 'adult' and self.has('Progressive Hookshot', 2)
         elif item == 'Silver Gauntlets':
-            return self.has('Progressive Strength Upgrade', 2) and self.is_adult()
+            return age == 'adult' and self.has('Progressive Strength Upgrade', 2)
         elif item == 'Golden Gauntlets':
-            return self.has('Progressive Strength Upgrade', 3) and self.is_adult()
+            return age == 'adult' and self.has('Progressive Strength Upgrade', 3)
+        elif item == 'Epona':
+            # Glitched can steal Epona by hovering over the LLR fences instead of using Epona's Song
+            return age == 'adult' and self.has('Epona') and (self.can_play('Eponas Song') or (self.is_glitched and self.can_hover()))
         elif item == 'Scarecrow':
-            return self.has('Progressive Hookshot') and self.is_adult() and self.has_ocarina()
+            return age == 'adult' and self.has('Progressive Hookshot') and self.can_play('Scarecrow Song')
         elif item == 'Distant Scarecrow':
-            return self.has('Progressive Hookshot', 2) and self.is_adult() and self.has_ocarina()
+            return age == 'adult' and self.has('Progressive Hookshot', 2) and self.can_play('Scarecrow Song')
         else:
             return self.has(item)
 
 
     def can_buy_bombchus(self):
-        return self.has('Buy Bombchu (5)') or \
-               self.has('Buy Bombchu (10)') or \
-               self.has('Buy Bombchu (20)') or \
-               self.can_reach('Castle Town Bombchu Bowling') or \
-               self.can_reach('Haunted Wasteland Bombchu Salesman', 'Location')
+        return self.has_any_of(('Buy Bombchu (5)', 'Buy Bombchu (10)', 'Buy Bombchu (20)', 'Bombchu Drop'))
 
 
     def has_bombchus(self):
-        return (self.world.bombchus_in_logic and \
-                    (any(pritem.startswith('Bombchus') for pritem in self.prog_items) and \
-                        self.can_buy_bombchus())) \
-            or (not self.world.bombchus_in_logic and self.has('Bomb Bag') and \
-                        self.can_buy_bombchus())
+        return self.can_buy_bombchus() and (self.world.bombchus_in_logic or self.has('Bomb Bag'))
 
 
     def has_bombchus_item(self):
-        return (self.world.bombchus_in_logic and \
-                (any(pritem.startswith('Bombchus') for pritem in self.prog_items) \
-                or (self.has('Progressive Wallet') and self.can_reach('Haunted Wasteland')))) \
-            or (not self.world.bombchus_in_logic and self.has('Bomb Bag'))
+        if self.world.bombchus_in_logic:
+            return self.has_any_of(('Bombchus', 'Bombchus (5)', 'Bombchus (10)', 'Bombchus (20)'))
+        else:
+            return self.has('Bomb Bag')
 
 
     def has_explosives(self):
-        return self.has_bombs() or self.has_bombchus()
+        return self.has_bombs() or (self.world.bombchus_in_logic and self.has_bombchus())
 
 
-    def can_blast_or_smash(self):
-        return self.has_explosives() or (self.is_adult() and self.has('Hammer'))
+    def can_blast_or_smash(self, age=None):
+        return self.has_explosives() or self.can_use('Hammer', age=age)
 
 
     def can_dive(self):
@@ -211,50 +177,105 @@ class State(object):
 
 
     def can_see_with_lens(self):
-        return ((self.has('Magic Meter') and self.has('Lens of Truth')) or self.world.logic_lens != 'all')
+        return self.world.logic_lens != 'all' or self.has_all_of(('Magic Meter', 'Lens of Truth'))
 
 
-    def has_projectile(self, age='either'):
-        if age == 'child':
-            return self.has_explosives() or self.has_slingshot() or self.has('Boomerang')
-        elif age == 'adult':
-            return self.has_explosives() or self.has_bow() or self.has('Progressive Hookshot')
-        elif age == 'both':
-            return self.has_explosives() or ((self.has_bow() or self.has('Progressive Hookshot')) and (self.has_slingshot() or self.has('Boomerang')))
+    def can_cut_shrubs(self, age=None):
+        return age == 'adult' or self.has_sticks() or \
+               self.has_any_of(('Kokiri Sword', 'Boomerang')) or \
+               self.has_explosives()
+
+
+    def can_summon_gossip_fairy(self):
+        return self.has_ocarina() and self.has_any_of(('Zeldas Lullaby', 'Eponas Song', 'Song of Time', 'Suns Song'))
+
+
+    def can_summon_gossip_fairy_without_suns(self):
+        return self.has_ocarina() and self.has_any_of(('Zeldas Lullaby', 'Eponas Song', 'Song of Time'))
+
+
+    def can_plant_bugs(self, age=None):
+        return age == 'child' and self.has_bugs()
+
+
+    def has_bugs(self):
+        return self.has_any_of(('Bugs', 'Buy Bottle Bug'))
+
+
+    def has_blue_fire(self):
+        return self.has_any_of(('Blue Fire', 'Buy Blue Fire'))
+
+
+    def has_fish(self):
+        return self.has_any_of(('Fish', 'Buy Fish'))
+
+
+    def has_fairy(self):
+        return self.has_any_of(('Fairy', 'Buy Fairy\'s Spirit'))
+
+
+    def has_big_poe_drop(self):
+        return self.has('Big Poe')
+
+
+    def can_use_projectile(self, age=None):
+        if self.has_explosives():
+            return True
+        if age == 'adult':
+            return self.has_any_of(('Bow', 'Progressive Hookshot'))
         else:
-            return self.has_explosives() or ((self.has_bow() or self.has('Progressive Hookshot')) or (self.has_slingshot() or self.has('Boomerang')))
+            return age == 'child' and self.has_any_of(('Slingshot', 'Boomerang'))
 
 
-    def has_GoronTunic(self):
-        return (self.has('Goron Tunic') or self.has('Buy Goron Tunic'))
+    def has_projectile(self, for_age='either'):
+        if self.has_explosives():
+            return True
+        if for_age == 'child':
+            return self.has_any_of(('Slingshot', 'Boomerang'))
+        elif for_age == 'adult':
+            return self.has_any_of(('Bow', 'Progressive Hookshot'))
+        elif for_age == 'both':
+            return (self.has_any_of(('Bow', 'Progressive Hookshot'))
+                    and self.has_any_of(('Slingshot', 'Boomerang')))
+        else:
+            return self.has_any_of(('Bow', 'Progressive Hookshot', 'Slingshot', 'Boomerang'))
 
 
-    def has_ZoraTunic(self):
-        return (self.has('Zora Tunic') or self.has('Buy Zora Tunic'))
+    def can_leave_forest(self, age=None):
+        return self.world.open_forest != 'closed' or age == 'adult' or self.is_glitched or self.has('Deku Tree Clear')
 
 
-    def can_leave_forest(self):
-        return self.world.open_forest or self.can_reach(self.world.get_location('Queen Gohma'))
-
-
-    def can_finish_adult_trades(self):
-        zora_thawed = (self.can_play('Zeldas Lullaby') or (self.has('Hover Boots') and self.world.logic_zora_with_hovers)) and self.has_blue_fire()
-        carpenter_access = self.has('Epona') or self.has('Progressive Hookshot', 2)
-        return (self.has('Claim Check') or ((self.has('Progressive Strength Upgrade') or self.can_blast_or_smash() or self.has_bow()) and (((self.has('Eyedrops') or self.has('Eyeball Frog') or self.has('Prescription') or self.has('Broken Sword')) and zora_thawed) or ((self.has('Poachers Saw') or self.has('Odd Mushroom') or self.has('Cojiro') or self.has('Pocket Cucco') or self.has('Pocket Egg')) and zora_thawed and carpenter_access))))
+    def guarantee_trade_path(self, age=None):
+        if self.world.shuffle_interior_entrances or self.world.shuffle_overworld_entrances:
+            # Timers are disabled and items don't revert on save warp in those ER settings
+            return True
+        else:
+            return (
+                # Check necessary items for the paths to Biggoron that fit the timer
+                self.world.logic_biggoron_bolero
+                # Getting to Biggoron without ER or the trick above involves either
+                # Darunia's Chamber access or clearing the boulders to get up DMT
+                or self.can_blast_or_smash(age=age)
+                or self.has('Stop Link the Goron')
+            )
 
 
     def has_bottle(self):
-        is_normal_bottle = lambda item: (item.startswith('Bottle') and item != 'Bottle with Letter' and (item != 'Bottle with Big Poe' or self.is_adult()))
-        return any(is_normal_bottle(pritem) for pritem in self.prog_items)
-
-
-    def bottle_count(self):
-        return sum([pritem for pritem in self.prog_items if pritem.startswith('Bottle') and pritem != 'Bottle with Letter' and (pritem != 'Bottle with Big Poe' or self.is_adult())])
+        # Extra Ruto's Letter are automatically emptied
+        return self.has_any_of(ItemInfo.bottles) or self.has('Bottle with Letter', 2)
 
 
     def has_hearts(self, count):
         # Warning: This only considers items that are marked as advancement items
         return self.heart_count() >= count
+
+
+    def has_shield(self, age=None):
+        #The mirror shield does not count as it cannot reflect deku scrub attack
+        if age == 'adult':
+            return self.has('Buy Hylian Shield')
+        else:
+            return age == 'child' and self.has('Buy Deku Shield')
 
 
     def heart_count(self):
@@ -266,46 +287,89 @@ class State(object):
         )
 
 
-    def has_fire_source(self):
-        return self.can_use('Dins Fire') or self.can_use('Fire Arrows')
+    def has_fire_source(self, age=None):
+        return self.can_use('Dins Fire') or self.can_use('Fire Arrows', age=age)
+
+
+    def has_fire_source_with_torch(self, age=None):
+        return self.has_fire_source() or (age == 'child' and self.has_sticks())
 
 
     def guarantee_hint(self):
-        if(self.world.hints == 'mask'):
+        if self.world.hints == 'mask':
             # has the mask of truth
-            return self.has('Zeldas Letter') and self.can_play('Sarias Song') and self.has('Kokiri Emerald') and self.has('Goron Ruby') and self.has('Zora Sapphire')
-        elif(self.world.hints == 'agony'):
+            return self.has('Mask of Truth')
+        elif self.world.hints == 'agony':
             # has the Stone of Agony
             return self.has('Stone of Agony')
         return True
 
 
-    def nighttime(self):
-        if self.world.logic_no_night_tokens_without_suns_song:
-            return self.can_play('Suns Song')
-        return True
-
-
     def had_night_start(self):
         stod = self.world.starting_tod
-        # These are all between 6:30 and 18:00
-        if (stod == 'evening' or        # 18
-            stod == 'dusk' or           # 21
+        # These are all not between 6:30 and 18:00
+        if (stod == 'sunset' or         # 18
+            stod == 'evening' or        # 21
             stod == 'midnight' or       # 00
-            stod == 'witching-hour' or  # 03
-            stod == 'early-morning'):   # 06
+            stod == 'witching-hour'):   # 03
             return True
         else:
             return False
 
 
-    def can_finish_GerudoFortress(self):
+    def can_finish_GerudoFortress(self, age=None):
         if self.world.gerudo_fortress == 'normal':
-            return self.has('Small Key (Gerudo Fortress)', 4) and (self.can_use('Bow') or self.can_use('Hookshot') or self.can_use('Hover Boots') or self.world.logic_gerudo_kitchen)
+            return (self.has('Small Key (Gerudo Fortress)', 4) and
+                    (age == 'adult' or self.has('Kokiri Sword') or self.is_glitched) and
+                    (self.can_use('Bow', age=age)
+                        or self.can_use('Hookshot', age=age)
+                        or self.can_use('Hover Boots', age=age)
+                        or self.has('Gerudo Membership Card')
+                        or self.world.logic_gerudo_kitchen
+                        or self.is_glitched))
         elif self.world.gerudo_fortress == 'fast':
-            return self.has('Small Key (Gerudo Fortress)', 1) and self.is_adult()
+            return (self.has('Small Key (Gerudo Fortress)', 1) and
+                    (age == 'adult' or self.has('Kokiri Sword') or self.is_glitched))
         else:
-            return self.is_adult()
+            return True
+
+
+    def can_shield(self, age=None):
+        if age == 'adult':
+            return self.has_any_of(('Buy Hylian Shield', 'Mirror Shield'))
+        else:
+            return age == 'child' and self.has('Buy Deku Shield')
+
+
+    def can_mega(self, age=None):
+        return self.has_explosives() and self.can_shield(age=age)
+
+
+    def can_isg(self, age=None):
+        return self.can_shield(age=age) and (age == 'adult' or self.has_sticks() or self.has('Kokiri Sword'))
+
+
+    def can_hover(self, age=None):
+        return self.can_mega(age=age) and self.can_isg(age=age)
+
+
+    def can_weirdshot(self, age=None):
+        return self.can_mega(age=age) and self.can_use('Hookshot', age=age)
+
+
+    def can_jumpslash(self, age=None):
+        return age == 'adult' or (age == 'child' and (self.has_sticks or self.has('Kokiri Sword')))
+
+
+    # Used for fall damage and other situations where damage is unavoidable
+    def can_live_dmg(self, hearts):
+        mult = self.world.damage_multiplier
+        if hearts*4 >= 3:
+            return mult != 'ohko' and mult != 'quadruple'
+        elif hearts*4 < 3:
+            return mult != 'ohko'
+        else:
+            return True
 
 
     # Be careful using this function. It will not collect any
@@ -313,7 +377,6 @@ class State(object):
     def collect(self, item):
         if item.advancement:
             self.prog_items[item.name] += 1
-            self.clear_cached_unreachable()
 
 
     # Be careful using this function. It will not uncollect any
@@ -324,12 +387,6 @@ class State(object):
             if self.prog_items[item.name] <= 0:
                 del self.prog_items[item.name]
 
-            # invalidate collected cache. unreachable locations are still unreachable
-            self.region_cache =   {k: v for k, v in self.region_cache.items() if not v}
-            self.location_cache = {k: v for k, v in self.location_cache.items() if not v}
-            self.entrance_cache = {k: v for k, v in self.entrance_cache.items() if not v}
-            self.recursion_count = 0
-
 
     def __getstate__(self):
         return self.__dict__.copy()
@@ -339,116 +396,48 @@ class State(object):
         self.__dict__.update(state)
 
 
-    def __getattr__(self, item):
-        if item.startswith('can_reach_'):
-            return self.can_reach(item[10])
-        elif item.startswith('has_'):
-            return self.has(item[4])
-
-        raise RuntimeError('Cannot parse %s.' % item)
-
-
-    # This function returns a list of states that is each of the base_states
-    # with every item still in the itempool. It only adds items that belong
-    # to its respective world. See fill_restrictive
     @staticmethod
-    def get_states_with_items(base_state_list, itempool):
-        new_state_list = []
-        for base_state in base_state_list:
-            new_state = base_state.copy()
-            for item in itempool:
-                if item.world.id == base_state.world.id: # Check world
-                    new_state.collect(item)
-            new_state_list.append(new_state)
-        State.collect_locations(new_state_list)
-        return new_state_list
-
-
-    # This collected all item locations available in the state list given that
-    # the states have collected items. The purpose is that it will search for
-    # all new items that become accessible with a new item set
-    @staticmethod
-    def collect_locations(state_list):
-        # Get all item locations in the worlds
-        item_locations = [location for state in state_list for location in state.world.get_filled_locations() if location.item.advancement]
-
-        # will loop if there is more items opened up in the previous iteration. Always run once
-        reachable_items_locations = True
-        while reachable_items_locations:
-            # get reachable new items locations
-            reachable_items_locations = [location for location in item_locations if location.name not in state_list[location.world.id].collected_locations and state_list[location.world.id].can_reach(location)]
-            for location in reachable_items_locations:
-                # Mark the location collected in the state world it exists in
-                state_list[location.world.id].collected_locations[location.name] = True
-                # Collect the item for the state world it is for
-                state_list[location.item.world.id].collect(location.item)
-
-
-    # This returns True is every state is beatable. It's important to ensure
-    # all states beatable since items required in one world can be in another.
-    @staticmethod
-    def can_beat_game(state_list, scan_for_items=True):
-        if scan_for_items:
-            # Check if already beaten
-            game_beaten = True
-            for state in state_list:
-                if not state.has('Triforce'):
-                    game_beaten = False
-                    break
-            if game_beaten:
-                return True
-
-            # collect all available items
-            new_state_list = [state.copy() for state in state_list]
-            State.collect_locations(new_state_list)
-        else:
-            new_state_list = state_list
-
-        # if the every state got the Triforce, then return True
-        for state in new_state_list:
-            if not state.has('Triforce'):
-                return False
-        return True
+    def can_beat_game(state_list):
+        return Playthrough(state_list).can_beat_game()
 
 
     @staticmethod
     def update_required_items(spoiler):
         worlds = spoiler.worlds
-        state_list = [world.state for world in worlds]
 
         # get list of all of the progressive items that can appear in hints
+        # all_locations: all progressive items. have to collect from these
+        # item_locations: only the ones that should appear as "required"/WotH
         all_locations = [location for world in worlds for location in world.get_filled_locations()]
-        item_locations = [location for location in all_locations if location.item.majoritem and not location.locked]
+        # Set to test inclusion against
+        item_locations = {location for location in all_locations if location.item.majoritem and not location.locked}
 
         # if the playthrough was generated, filter the list of locations to the
         # locations in the playthrough. The required locations is a subset of these
         # locations. Can't use the locations directly since they are location to the
-        # copied spoiler world, so must try to find the matching locations by name
+        # copied spoiler world, so must compare via name and world id
         if spoiler.playthrough:
-            spoiler_locations = defaultdict(lambda: [])
-            for location in [location for _,sphere in spoiler.playthrough.items() for location in sphere]:
-                spoiler_locations[location.name].append(location.world.id)
-            item_locations = list(filter(lambda location: location.world.id in spoiler_locations[location.name], item_locations))
+            translate = lambda loc: worlds[loc.world.id].get_location(loc.name)
+            spoiler_locations = set(map(translate, itertools.chain.from_iterable(spoiler.playthrough.values())))
+            item_locations &= spoiler_locations
 
         required_locations = []
-        reachable_items_locations = True
-        while (item_locations and reachable_items_locations):
-            reachable_items_locations = [location for location in all_locations if location.name not in state_list[location.world.id].collected_locations and state_list[location.world.id].can_reach(location)]
-            for location in reachable_items_locations:
-                # Try to remove items one at a time and see if the game is still beatable
-                if location in item_locations:
-                    old_item = location.item
-                    location.item = None
-                    if not State.can_beat_game(state_list):
-                        required_locations.append(location)
-                    location.item = old_item
-                    item_locations.remove(location)
-                state_list[location.world.id].collected_locations[location.name] = True
-                state_list[location.item.world.id].collect(location.item)
+
+        playthrough = Playthrough([world.state for world in worlds])
+        for location in playthrough.iter_reachable_locations(all_locations):
+            # Try to remove items one at a time and see if the game is still beatable
+            if location in item_locations:
+                old_item = location.item
+                location.item = None
+                # copies state! This is very important as we're in the middle of a playthrough
+                # already, but beneficially, has playthrough it can start from
+                if not playthrough.can_beat_game():
+                    required_locations.append(location)
+                location.item = old_item
+            playthrough.state_list[location.item.world.id].collect(location.item)
 
         # Filter the required location to only include location in the world
         required_locations_dict = {}
         for world in worlds:
             required_locations_dict[world.id] = list(filter(lambda location: location.world.id == world.id, required_locations))
         spoiler.required_locations = required_locations_dict
-

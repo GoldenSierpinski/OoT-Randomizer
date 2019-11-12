@@ -668,30 +668,32 @@ typedef struct
                                         /* 0x02EC */
 } z64_gfx_t;
 
+typedef union
+{
+  struct
+  {
+    uint16_t  a  : 1;
+    uint16_t  b  : 1;
+    uint16_t  z  : 1;
+    uint16_t  s  : 1;
+    uint16_t  du : 1;
+    uint16_t  dd : 1;
+    uint16_t  dl : 1;
+    uint16_t  dr : 1;
+    uint16_t     : 2;
+    uint16_t  l  : 1;
+    uint16_t  r  : 1;
+    uint16_t  cu : 1;
+    uint16_t  cd : 1;
+    uint16_t  cl : 1;
+    uint16_t  cr : 1;
+  };
+  uint16_t    pad;
+} pad_t;
+
 typedef struct
 {
-  union
-  {
-    struct
-    {
-      uint16_t  a  : 1;
-      uint16_t  b  : 1;
-      uint16_t  z  : 1;
-      uint16_t  s  : 1;
-      uint16_t  du : 1;
-      uint16_t  dd : 1;
-      uint16_t  dl : 1;
-      uint16_t  dr : 1;
-      uint16_t     : 2;
-      uint16_t  l  : 1;
-      uint16_t  r  : 1;
-      uint16_t  cu : 1;
-      uint16_t  cd : 1;
-      uint16_t  cl : 1;
-      uint16_t  cr : 1;
-    };
-    uint16_t    pad;
-  };
+  pad_t         pad;
   int8_t        x;
   int8_t        y;
 } z64_controller_t;
@@ -787,11 +789,11 @@ typedef struct
   uint16_t          unk_00_;
   z64_controller_t  raw_prev;
   uint16_t          unk_01_;
-  uint16_t          pad_pressed;
+  pad_t             pad_pressed;
   int8_t            x_diff;
   int8_t            y_diff;
   char              unk_02_[0x0002];
-  uint16_t          pad_released;
+  pad_t             pad_released;
   int8_t            adjusted_x;
   int8_t            adjusted_y;
   char              unk_03_[0x0002];
@@ -1125,6 +1127,7 @@ typedef struct
 #define z64_GetMatrixStackTop_addr              0x800AA78C
 #define z64_DisplayTextbox_addr                 0x800DCE14
 #define gspF3DEX2_NoN_fifoTextStart             0x800E3F70
+#define z64_fog_state_addr                      0x800F1640
 #define z64_day_speed_addr                      0x800F1650
 #define z64_light_handlers_addr                 0x800F1B40
 #define z64_object_table_addr                   0x800F8FF8
@@ -1196,6 +1199,7 @@ typedef float *(*z64_GetMatrixStackTop_proc)();
 #define z64_vi_counter          (*(uint32_t*)         z64_vi_counter_addr)
 #define z64_stab                (*(z64_stab_t*)       z64_stab_addr)
 #define z64_scene_table         ( (z64_scene_table_t*)z64_scene_table_addr)
+#define z64_fog_state           (*(uint8_t*)          z64_fog_state_addr)
 #define z64_day_speed           (*(uint16_t*)         z64_day_speed_addr)
 #define z64_light_handlers      ( (z64_light_handler_t*)                      \
                                                       z64_light_handlers_addr)
