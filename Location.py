@@ -1,10 +1,11 @@
 from LocationList import location_table
+from Region import TimeOfDay
 from enum import Enum
 
 
 class Location(object):
 
-    def __init__(self, name='', address=None, address2=None, default=None, type='Chest', scene=None, parent=None, filter_tags=None):
+    def __init__(self, name='', address=None, address2=None, default=None, type='Chest', scene=None, parent=None, filter_tags=None, internal=False):
         self.name = name
         self.parent_region = parent
         self.item = None
@@ -13,10 +14,10 @@ class Location(object):
         self.default = default
         self.type = type
         self.scene = scene
-        self.spot_type = 'Location'
-        self.recursion_count = { 'child': 0, 'adult': 0 }
+        self.internal = internal
         self.staleness_count = 0
-        self.access_rule = lambda state: True
+        self.access_rule = lambda state, **kwargs: True
+        self.access_rules = []
         self.item_rule = lambda location, item: True
         self.locked = False
         self.price = None
@@ -35,14 +36,25 @@ class Location(object):
         if self.item:
             new_location.item = self.item.copy(new_region.world)
             new_location.item.location = new_location
-        new_location.spot_type = self.spot_type
         new_location.access_rule = self.access_rule
+        new_location.access_rules = list(self.access_rules)
         new_location.item_rule = self.item_rule
         new_location.locked = self.locked
+        new_location.internal = self.internal
         new_location.minor_only = self.minor_only
         new_location.disabled = self.disabled
 
         return new_location
+
+
+    def add_rule(self, lambda_rule):
+        self.access_rules.append(lambda_rule)
+        self.access_rule = lambda state, **kwargs: all(rule(state, **kwargs) for rule in self.access_rules)
+
+
+    def set_rule(self, lambda_rule):
+        self.access_rule = lambda_rule
+        self.access_rules = [lambda_rule]
 
 
     def can_fill(self, state, item, check_access=True):
@@ -51,18 +63,11 @@ class Location(object):
         return (
             not self.is_disabled() and 
             self.can_fill_fast(item) and
-            (not check_access or state.can_reach(self)))
+            (not check_access or state.playthrough.spot_access(self, 'either')))
 
 
     def can_fill_fast(self, item, manual=False):
         return (self.parent_region.can_fill(item, manual) and self.item_rule(self, item))
-
-
-    def can_reach(self, state, noparent=False):
-        if self.is_disabled():
-            return False
-
-        return state.with_spot(self.access_rule, spot=self) and (noparent or state.can_reach(self.parent_region, keep_tod=True))
 
 
     def is_disabled(self):
@@ -102,7 +107,7 @@ def LocationFactory(locations, world=None):
             if addresses is None:
                 addresses = (None, None)
             address, address2 = addresses
-            ret.append(Location(location, address, address2, default, type, scene, ret, filter_tags))
+            ret.append(Location(location, address, address2, default, type, scene, filter_tags=filter_tags))
         else:
             raise KeyError('Unknown Location: %s', location)
 

@@ -108,7 +108,7 @@ class VersionError(Exception):
 def check_version(checked_version):
     if compare_version(checked_version, __version__) < 0:
         try:
-            with urllib.request.urlopen('http://raw.githubusercontent.com/TestRunnerSRL/OoT-Randomizer/Dev/version.py') as versionurl:
+            with urllib.request.urlopen('http://raw.githubusercontent.com/TestRunnerSRL/OoT-Randomizer/master/version.py') as versionurl:
                 version = versionurl.read()
                 version = re.search(".__version__ = '(.+)'", str(version)).group(1)
 
@@ -177,4 +177,4 @@ def subprocess_args(include_stdout=True):
 def check_python_version():
     python_version = '.'.join([str(num) for num in sys.version_info[0:3]])
     if compare_version(python_version, '3.6.0') < 0:
-        raise Exception('Randomizer requires at least version 3.6 and you are using %s' % python_version)
+        raise VersionError('Randomizer requires at least version 3.6 and you are using %s' % python_version, "https://www.python.org/downloads/")

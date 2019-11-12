@@ -48,6 +48,13 @@ RAINBOW_BRIDGE_CONDITION:
 ; 4 = Vanilla
 ; 5 = Tokens
 
+LACS_CONDITION:
+.word 0x00
+; 0 = Vanilla
+; 1 = Medallions
+; 2 = Dungeons
+; 3 = Stones
+
 GOSSIP_HINT_CONDITION:
 .word 0x00
 ; 0 = Mask of Truth
@@ -57,6 +64,9 @@ GOSSIP_HINT_CONDITION:
 FREE_SCARECROW_ENABLED:
 .word 0x00
 
+RAINBOW_BRIDGE_TOKENS:
+.halfword 0x64
+
 JABU_ELEVATOR_ENABLE:
 .byte 0x00
 OCARINAS_SHUFFLED:
@@ -65,7 +75,15 @@ FAST_CHESTS:
 .byte 0x01
 SHUFFLE_COWS:
 .byte 0x00
+SHUFFLE_BEANS:
+.byte 0x00
 DISABLE_TIMERS:
+.byte 0x00
+NO_FOG_STATE:
+.byte 0x00
+DUNGEONS_SHUFFLED:
+.byte 0x00
+OVERWORLD_SHUFFLED:
 .byte 0x00
 
 .align 4

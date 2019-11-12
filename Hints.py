@@ -4,12 +4,13 @@ import logging
 import os
 import struct
 import random
+from collections import OrderedDict
 
 from HintList import getHint, getHintGroup, Hint, hintExclusions
-from ItemPool import eventlocations
+from Item import MakeEventItem
 from Messages import update_message_by_id
 from Playthrough import Playthrough
-from TextBox import lineWrap
+from TextBox import line_wrap
 from Utils import random_choices
 
 
@@ -33,7 +34,7 @@ class GossipText():
 
 
     def __str__(self):
-        return get_raw_text(lineWrap(colorText(self)))
+        return get_raw_text(line_wrap(colorText(self)))
 
 
 gossipLocations = {
@@ -98,6 +99,13 @@ def isRestrictedDungeonItem(dungeon, item):
     return False
 
 
+def stone_reachability(stone_name, stone_location):
+    # just name the event item after the gossip stone directly
+    MakeEventItem(stone_name, stone_location)
+
+    return lambda state, **kwargs: state.has(stone_name)
+
+
 def add_hint(spoiler, world, IDs, gossip_text, count, location=None, force_reachable=False):
     random.shuffle(IDs)
     skipped_ids = []
@@ -108,11 +116,13 @@ def add_hint(spoiler, world, IDs, gossip_text, count, location=None, force_reach
             id = IDs.pop(0)
 
             if gossipLocations[id].reachable:
-                stone_location = gossipLocations[id].location
+                stone_name = gossipLocations[id].location
+                stone_location = world.get_location(stone_name)
                 if not first or can_reach_stone(spoiler.worlds, stone_location, location):
                     if first and location:
-                        old_rule = location.access_rule
-                        location.access_rule = lambda state: state.can_reach(stone_location, resolution_hint='Location') and old_rule(state)
+                        # This mostly guarantees that we don't lock the player out of an item hint
+                        # by establishing a (hint -> item) -> hint -> item -> (first hint) loop
+                        location.add_rule(stone_reachability(stone_name, stone_location))
 
                     count -= 1
                     first = False
@@ -144,7 +154,7 @@ def can_reach_stone(worlds, stone_location, location):
     playthrough = Playthrough.max_explore([world.state for world in worlds])
     location.item = old_item
 
-    return (playthrough.state_list[location.world.id].can_reach(stone_location, resolution_hint='Location')
+    return (playthrough.spot_access(stone_location)
             and playthrough.state_list[location.world.id].guarantee_hint())
 
 
@@ -220,15 +230,24 @@ def get_hint_area(spot):
         return spot.parent_region.dungeon.hint
     elif spot.parent_region.hint:
         return spot.parent_region.hint
+    #Breadth first search for connected regions with a max depth of 2
     for entrance in spot.parent_region.entrances:
         if entrance.parent_region.hint:
             return entrance.parent_region.hint
+    for entrance in spot.parent_region.entrances:
+        for entrance2 in entrance.parent_region.entrances:
+            if entrance2.parent_region.hint:
+                return entrance2.parent_region.hint
     raise RuntimeError('No hint area could be found for %s [World %d]' % (spot, spot.world.id))
 
 
 def get_woth_hint(spoiler, world, checked):
     locations = spoiler.required_locations[world.id]
-    locations = list(filter(lambda location: location.name not in checked, locations))
+    locations = list(filter(lambda location: 
+        location.name not in checked and \
+        not (world.woth_dungeon >= 2 and location.parent_region.dungeon), 
+        locations))
+
     if not locations:
         return None
 
@@ -236,6 +255,8 @@ def get_woth_hint(spoiler, world, checked):
     checked.append(location.name)
 
     if location.parent_region.dungeon:
+        if world.hint_dist != 'very_strong':
+            world.woth_dungeon += 1
         location_text = getHint(location.parent_region.dungeon.name, world.clearer_hints).text
     else:
         location_text = get_hint_area(location)
@@ -255,7 +276,7 @@ def get_barren_hint(spoiler, world, checked):
     area_weights = [world.empty_areas[area]['weight'] for area in areas]
 
     area = random_choices(areas, weights=area_weights)[0]
-    if world.empty_areas[area]['dungeon']:
+    if world.hint_dist != 'very_strong' and world.empty_areas[area]['dungeon']:
         world.barren_dungeon = True
 
     checked.append(area)
@@ -286,9 +307,7 @@ def get_good_item_hint(spoiler, world, checked):
 def get_random_location_hint(spoiler, world, checked):
     locations = [location for location in world.get_filled_locations()
             if not location.name in checked and \
-            location.item.type != 'Event' and \
-            location.item.type != 'Drop' and \
-            location.item.type != 'Shop' and \
+            location.item.type not in ('Drop', 'Event', 'Shop', 'DungeonReward') and \
             not (location.parent_region.dungeon and \
                 isRestrictedDungeonItem(location.parent_region.dungeon, location.item)) and
             not location.locked]
@@ -324,6 +343,10 @@ def get_specific_hint(spoiler, world, checked, type):
     item_text = getHint(getItemGenericName(location.item), world.clearer_hints).text
 
     return (GossipText('%s #%s#.' % (location_text, item_text), ['Green', 'Red']), location)
+
+
+def get_sometimes_hint(spoiler, world, checked):
+    return get_specific_hint(spoiler, world, checked, 'sometimes')
 
 
 def get_song_hint(spoiler, world, checked):
@@ -392,6 +415,7 @@ hint_func = {
     'woth':     get_woth_hint,
     'barren':   get_barren_hint,
     'item':     get_good_item_hint,
+    'sometimes':get_sometimes_hint,    
     'song':     get_song_hint,
     'minigame': get_minigame_hint,
     'ow':       get_overworld_hint,
@@ -462,21 +486,16 @@ hint_dist_sets = {
         'random':   (0.0, 0),
         'junk':     (0.0, 0),
     },
-    'tournament': {
+    'tournament': OrderedDict({
         # (number of hints, count per hint)
-        'trial':    (0.0, 2),
-        'always':   (0.0, 2),
-        'woth':     (4.0, 2),
-        'barren':   (2.0, 2),
-        'item':     (0.0, 1),
-        'song':     (1.0, 1),
-        'minigame': (0.0, 1),
-        'ow':       (2.0, 1),
-        'dungeon':  (3.0, 1),
-        'entrance': (4.0, 1),
-        'random':   (0.0, 1),
-        'junk':     (0.0, 0),
-    },
+        'trial':     (0.0, 2),
+        'always':    (0.0, 2),
+        'woth':      (5.0, 2),
+        'barren':    (3.0, 2),
+        'entrance':  (4.0, 2),
+        'sometimes': (0.0, 2),
+        'random':    (0.0, 2),
+    }),
 }
 
 
@@ -486,11 +505,12 @@ def buildGossipHints(spoiler, world):
     hintExclusions(world, clear_cache=True)
 
     world.barren_dungeon = False
+    world.woth_dungeon = 0
 
     playthrough = Playthrough.max_explore([w.state for w in spoiler.worlds])
     for stone in gossipLocations.values():
         stone.reachable = (
-            playthrough.state_list[world.id].can_reach(stone.location, resolution_hint='Location')
+            playthrough.spot_access(world.get_location(stone.location))
             and playthrough.state_list[world.id].guarantee_hint())
 
     checkedLocations = []
@@ -533,20 +553,38 @@ def buildGossipHints(spoiler, world):
 
     hint_types = list(hint_types)
     hint_prob  = list(hint_prob)
+    hint_counts = {}
+
     if world.hint_dist == "tournament":
         fixed_hint_types = []
         for hint_type in hint_types:
             fixed_hint_types.extend([hint_type] * int(hint_dist[hint_type][0]))
+        fill_hint_types = ['sometimes', 'random']
+        current_fill_type = fill_hint_types.pop(0)
 
     while stoneIDs:
         if world.hint_dist == "tournament":
             if fixed_hint_types:
                 hint_type = fixed_hint_types.pop(0)
             else:
-                hint_type = 'random'
+                hint_type = current_fill_type
         else:
             try:
-                hint_type = random_choices(hint_types, weights=hint_prob)[0]
+                # Weight the probabilities such that hints that are over the expected proportion
+                # will be drawn less, and hints that are under will be drawn more.
+                # This tightens the variance quite a bit. The variance can be adjusted via the power
+                weighted_hint_prob = []
+                for w1_type, w1_prob in zip(hint_types, hint_prob):
+                    p = w1_prob
+                    if p != 0: # If the base prob is 0, then it's 0
+                        for w2_type, w2_prob in zip(hint_types, hint_prob):
+                            if w2_prob != 0: # If the other prob is 0, then it has no effect
+                                # Raising this term to a power greater than 1 will decrease variance
+                                # Conversely, a power less than 1 will increase variance
+                                p = p * (((hint_counts.get(w2_type, 0) / w2_prob) + 1) / ((hint_counts.get(w1_type, 0) / w1_prob) + 1))
+                    weighted_hint_prob.append(p)
+
+                hint_type = random_choices(hint_types, weights=weighted_hint_prob)[0]
             except IndexError:
                 raise Exception('Not enough valid hints to fill gossip stone locations.')
 
@@ -555,11 +593,18 @@ def buildGossipHints(spoiler, world):
         if hint == None:
             index = hint_types.index(hint_type)
             hint_prob[index] = 0
-            if world.hint_dist == "tournament" and hint_type == 'random':
-                raise Exception('Not enough valid %s hints for tournament distribution' % hint_type)
+            if world.hint_dist == "tournament" and hint_type == current_fill_type:
+                logging.getLogger('').info('Not enough valid %s hints for tournament distribution.', hint_type)
+                if fill_hint_types:
+                    current_fill_type = fill_hint_types.pop(0)
+                    logging.getLogger('').info('Switching to %s hints to fill remaining gossip stone locations.', current_fill_type)
+                else:
+                    raise Exception('Not enough valid hints for tournament distribution.')
         else:
             gossip_text, location = hint
             place_ok = add_hint(spoiler, world, stoneIDs, gossip_text, hint_dist[hint_type][1], location)
+            if place_ok:
+                hint_counts[hint_type] = hint_counts.get(hint_type, 0) + 1
             if not place_ok and world.hint_dist == "tournament":
                 fixed_hint_types.insert(0, hint_type)
 
@@ -604,7 +649,7 @@ def buildBossString(reward, color, world):
         if location.item.name == reward:
             item_icon = chr(location.item.special['item_id'])
             location_text = getHint(location.name, world.clearer_hints).text
-            return str(GossipText("\x08\x13%s%s" % (item_icon, location_text), [color], prefix=''))
+            return str(GossipText("\x08\x13%s%s" % (item_icon, location_text), [color], prefix='')) + '\x04'
     return ''
 
 

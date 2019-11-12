@@ -4,11 +4,11 @@ import random
 class Hint(object):
     name = ""
     text = ""
-    type = ""
+    type = []
 
     def __init__(self, name, text, type, choice=None):
         self.name = name
-        self.type = type
+        self.type = [type] if not isinstance(type, list) else type
 
         if isinstance(text, str):
             self.text = text
@@ -40,13 +40,35 @@ def getHintGroup(group, world):
 
         hint = getHint(name, world.clearer_hints)
 
-        # 10 Big Poes does not require hint if 3 or less required.
-        if name == '10 Big Poes' and world.big_poe_count <= 3:
-            hint.type = 'overworld'
+        if hint.name in world.always_hints:
+            hint.type = 'always'
 
-        if hint.type == group and not (name in hintExclusions(world)):
+        if group in hint.type and not (name in hintExclusions(world)):
             ret.append(hint)
     return ret
+
+
+def getRequiredHints(world):
+    ret = []
+    for name in hintTable:
+        hint = getHint(name)
+        if 'always' in hint.type or hint.name in conditional_always and conditional_always[hint.name](world):
+            ret.append(hint)
+    return ret
+
+
+# Hints required under certain settings
+conditional_always = {
+    '10 Big Poes':               lambda world: world.big_poe_count > 3,
+    'Deku Theater Skull Mask':   lambda world: world.hint_dist == 'tournament',
+    'Song from Ocarina of Time': lambda world: world.bridge not in ('stones', 'dungeons') and world.shuffle_ganon_bosskey not in ('lacs_stones', 'lacs_dungeons'),
+    'Ocarina of Time':           lambda world: world.bridge not in ('stones', 'dungeons') and world.shuffle_ganon_bosskey not in ('lacs_stones', 'lacs_dungeons'),
+    'Sheik in Kakariko':         lambda world: world.bridge not in ('medallions', 'dungeons') and world.shuffle_ganon_bosskey not in ('lacs_medallions', 'lacs_dungeons'),
+    'Biggoron':                  lambda world: world.logic_earliest_adult_trade != 'claim_check' or world.logic_latest_adult_trade != 'claim_check',
+    '50 Gold Skulltula Reward':  lambda world: world.bridge != 'tokens' or world.bridge_tokens < 50,
+    '40 Gold Skulltula Reward':  lambda world: world.bridge != 'tokens' or world.bridge_tokens < 40,
+    '30 Gold Skulltula Reward':  lambda world: world.bridge != 'tokens' or world.bridge_tokens < 30,
+}
 
 
 # table of hints, format is (name, hint text, clear hint text, type of hint) there are special characters that are read for certain in game commands:
@@ -150,7 +172,8 @@ hintTable = {
     'Bombs (10)':                                               (["some explosives", "some blast balls"], "Bombs (10 pieces)", 'item'),
     'Bombs (20)':                                               (["lots-o-explosives", "plenty of blast balls"], "Bombs (20 pieces)", 'item'),
     'Ice Trap':                                                 (["a gift from Ganon", "a chilling discovery", "frosty fun"], "an Ice Trap", 'item'),
-    'Magic Bean':                                               (["wizardly legumes"], "a Magic Bean", 'item'),
+    'Magic Bean':                                               (["a wizardly legume"], "a Magic Bean", 'item'),
+    'Magic Bean Pack':                                          (["wizardly legumes"], "Magic Beans", 'item'),
     'Bombchus':                                                 (["mice bombs", "proximity mice", "wall crawlers", "trail blazers"], "Bombchus", 'item'),
     'Bombchus (5)':                                             (["a few mice bombs", "a few proximity mice", "a few wall crawlers", "a few trail blazers"], "Bombchus (5 pieces)", 'item'),
     'Bombchus (10)':                                            (["some mice bombs", "some proximity mice", "some wall crawlers", "some trail blazers"], "Bombchus (10 pieces)", 'item'),
@@ -160,78 +183,81 @@ hintTable = {
     'Deku Seeds (30)':                                          (["catapult ammo", "lots-o-seeds"], "Deku Seeds (30 pieces)", 'item'),
     'Gold Skulltula Token':                                     (["proof of destruction", "an arachnid chip", "spider remains", "one percent of a curse"], "a Gold Skulltula Token", 'item'),
 
-    '10 Big Poes':                                              (["#Big Poes# leads to", "#ghost hunters# will be rewarded with"], None, 'always'),
     'Deku Theater Mask of Truth':                               ("the #Mask of Truth# yields", None, 'always'),
-    '30 Gold Skulltula Reward':                                 ("slaying #30 Gold Skulltulas# reveals", None, 'always'),
-    '40 Gold Skulltula Reward':                                 ("slaying #40 Gold Skulltulas# reveals", None, 'always'),
-    '50 Gold Skulltula Reward':                                 ("slaying #50 Gold Skulltulas# reveals", None, 'always'),
-    'Ocarina of Time':                                          ("the #treasure thrown by Princess Zelda# is", None, 'always'),
-    'Song from Ocarina of Time':                                ("the #Ocarina of Time# teaches", None, 'always'),
-    'Biggoron':                                                 ("#Biggoron# crafts", None, 'always'),
     'Frog Ocarina Game':                                        (["an #amphibian feast# yields", "the #croaking choir's magnum opus# awards", "the #froggy finale# yields"], "the final reward from the #Frogs of Zora's River# is", 'always'),
 
-    'Song from Composer Grave':                                 (["in the #Composers' Grave#, ReDead guard", "the #Composer Brothers# wrote"], None, 'song'),
-    'Sheik Forest Song':                                        ("deep in #the forest# Sheik teaches", None, 'song'),
-    'Sheik at Temple':                                          ("Sheik waits at a #monument to time# to teach", None, 'song'),
-    'Sheik in Crater':                                          ("the #crater's melody# is", None, 'song'),
-    'Sheik in Ice Cavern':                                      ("the #frozen cavern# echoes with", None, 'song'),
-    'Sheik in Kakariko':                                        ("a #ravaged village# mourns with", None, 'song'),
-    'Sheik at Colossus':                                        ("a hero ventures beyond #the Wasteland# to learn", None, 'song'),
+    'Song from Ocarina of Time':                                ("the #Ocarina of Time# teaches", None, ['song', 'sometimes']),
+    'Song from Composer Grave':                                 (["in the #Composers' Grave#, ReDead guard", "the #Composer Brothers# wrote"], None, ['song', 'sometimes']),
+    'Sheik Forest Song':                                        ("deep in #the forest# Sheik teaches", None, ['song', 'sometimes']),
+    'Sheik at Temple':                                          ("Sheik waits at a #monument to time# to teach", None, ['song', 'sometimes']),
+    'Sheik in Crater':                                          ("the #crater's melody# is", None, ['song', 'sometimes']),
+    'Sheik in Ice Cavern':                                      ("the #frozen cavern# echoes with", None, ['song', 'sometimes']),
+    'Sheik in Kakariko':                                        ("a #ravaged village# mourns with", None, ['song', 'sometimes']),
+    'Sheik at Colossus':                                        ("a hero ventures beyond #the Wasteland# to learn", None, ['song', 'sometimes']),
 
     'Child Fishing':                                            ("#fishing in youth# bestows", None, 'minigame'),
     'Adult Fishing':                                            ("#fishing in maturity# bestows", None, 'minigame'),
     'Child Shooting Gallery':                                   ("#shooting in youth# grants", None, 'minigame'),
-    'Adult Shooting Gallery':                                   ("#shooting in maturity# grants", None, 'minigame'),
+    'Adult Shooting Gallery':                                   ("#shooting in maturity# grants", None, ['minigame', 'sometimes']),
     'Bombchu Bowling Bomb Bag':                                 ("the #first explosive prize# is", None, 'minigame'),
     'Bombchu Bowling Piece of Heart':                           ("the #second explosive prize# is", None, 'minigame'),
-    'Treasure Chest Game':                                      (["#gambling# grants", "there is a #1/32 chance# to win"], "the #treasure chest game# grants", 'minigame'),
-    'Horseback Archery 1500 Points':                            ("mastery of #horseback archery# grants", "scoring 1500 in #horseback archery# grants", 'minigame'),
+    'Treasure Chest Game':                                      (["#gambling# grants", "there is a #1/32 chance# to win"], "the #treasure chest game# grants", ['minigame', 'sometimes']),
+    'Horseback Archery 1500 Points':                            ("mastery of #horseback archery# grants", "scoring 1500 in #horseback archery# grants", ['minigame', 'sometimes']),
+    'Links House Cow':                                          ("the #bovine bounty of a horseback hustle# gifts", None, ['minigame', 'sometimes']),
 
-    'Deku Theater Skull Mask':                                  ("the #Skull Mask# yields", None, 'overworld'),
-    '20 Gold Skulltula Reward':                                 ("slaying #20 Gold Skulltulas# reveals", None, 'overworld'),
-    'Darunias Joy':                                             ("#Darunia's dance# leads to", None, 'overworld'),
-    'Skull Kid':                                                ("the #Skull Kid# grants", None, 'overworld'),
-    'Lake Hylia Sun':                                           ("staring into #the sun# grants", "shooting #the sun# grants", 'overworld'),
-    'Heart Piece Grave Chest':                                  ("playing #Sun's Song# in a grave spawns", None, 'overworld'),
-    'Goron City Leftmost Maze Chest':                           ("in #Goron City# the hammer unlocks", None, 'overworld'),
-    'Gerudo Valley Hammer Rocks Chest':                         ("in #Gerudo Valley# the hammer unlocks", None, 'overworld'),
-    'GS Hyrule Castle Grotto':                                  ("a #storm near the castle# reveals", None, 'overworld'),
-    'GS Hyrule Field Near Gerudo Valley':                       ("buried near #the valley# a spider holds", None, 'overworld'),
-    'GS Zora\'s Fountain Hidden Cave':                          ("a spider high above the #icy waters# holds", None, 'overworld'),
-    'Haunted Wasteland Structure Chest':                        (["deep in the #Wasteland# is", "beneath #the sands#, flames reveal"], None, 'overworld'),
-    'GS Wasteland Ruins':                                       ("a #spider in the Wasteland# hold", None, 'overworld'),
-    'Composer Grave Chest':                                     (["in the #Composers' Grave#, darkness hides", "the #Composer Brothers# hid"], None, 'overworld'),
-    'Zoras Fountain Bottom Freestanding PoH':                   ("under the #icy waters# lies", None, 'overworld'),
-    'Goron City Pot Freestanding PoH':                          ("spinning #Goron pottery# contains", None, 'overworld'),
-    'King Zora Thawed':                                         ("unfreezing #King Zora# grants", None, 'overworld'),
-    'DMC Deku Scrub Bombs':                                     ("in the Crater a #scrub# sells", None, 'overworld'),
+    '10 Big Poes':                                              (["#Big Poes# leads to", "#ghost hunters# will be rewarded with"], None, ['overworld', 'sometimes']),
+    'Deku Theater Skull Mask':                                  ("the #Skull Mask# yields", None, ['overworld', 'sometimes']),
+    'Ocarina of Time':                                          ("the #treasure thrown by Princess Zelda# is", None, ['overworld', 'sometimes']),
+    'Biggoron':                                                 ("#Biggoron# crafts", None, ['overworld', 'sometimes']),
+    '50 Gold Skulltula Reward':                                 ("slaying #50 Gold Skulltulas# reveals", None, ['overworld', 'sometimes']),
+    '40 Gold Skulltula Reward':                                 ("slaying #40 Gold Skulltulas# reveals", None, ['overworld', 'sometimes']),
+    '30 Gold Skulltula Reward':                                 ("slaying #30 Gold Skulltulas# reveals", None, ['overworld', 'sometimes']),
+    '20 Gold Skulltula Reward':                                 ("slaying #20 Gold Skulltulas# reveals", None, ['overworld', 'sometimes']),
+    'Anjus Chickens':                                           ("#collecting cuccos# rewards", None, 'sometimes'),
+    'Darunias Joy':                                             ("#Darunia's dance# leads to", None, ['overworld', 'sometimes']),
+    'Skull Kid':                                                ("the #Skull Kid# grants", None, ['overworld', 'sometimes']),
+    'Lake Hylia Sun':                                           ("staring into #the sun# grants", "shooting #the sun# grants", ['overworld', 'sometimes']),
+    'Heart Piece Grave Chest':                                  ("playing #Sun's Song# in a grave spawns", None, ['overworld', 'sometimes']),
+    'Goron City Leftmost Maze Chest':                           ("in #Goron City# the hammer unlocks", None, ['overworld', 'sometimes']),
+    'Gerudo Valley Hammer Rocks Chest':                         ("in #Gerudo Valley# the hammer unlocks", None, ['overworld', 'sometimes']),
+    'GS Hyrule Castle Grotto':                                  ("a #storm near the castle# reveals", None, ['overworld', 'sometimes']),
+    'GS Hyrule Field Near Gerudo Valley':                       ("buried near #the valley# a spider holds", None, ['overworld', 'sometimes']),
+    'GS Zora\'s Fountain Hidden Cave':                          ("a spider high above the #icy waters# holds", None, ['overworld', 'sometimes']),
+    'Haunted Wasteland Structure Chest':                        (["deep in the #Wasteland# is", "beneath #the sands#, flames reveal"], None, ['overworld', 'sometimes']),
+    'GS Wasteland Ruins':                                       ("a #spider in the Wasteland# hold", None, ['overworld', 'sometimes']),
+    'Composer Grave Chest':                                     (["in the #Composers' Grave#, darkness hides", "the #Composer Brothers# hid"], None, ['overworld', 'sometimes']),
+    'Zoras Fountain Bottom Freestanding PoH':                   ("under the #icy waters# lies", None, ['overworld', 'sometimes']),
+    'Goron City Pot Freestanding PoH':                          ("spinning #Goron pottery# contains", None, ['overworld', 'sometimes']),
+    'King Zora Thawed':                                         ("unfreezing #King Zora# grants", None, ['overworld', 'sometimes']),
+    'DMC Deku Scrub Bombs':                                     ("in the Crater a #scrub# sells", None, ['overworld', 'sometimes']),
 
-    'Deku Tree MQ After Spinning Log Chest':                    ("within #a tree#, a temporal stone contains", None, 'dungeon'),
-    'GS Deku Tree MQ Basement Ceiling':                         ("within #a tree#, a spider on the ceiling holds", None, 'dungeon'),
-    'GS Jabu Jabu MQ Invisible Enemies Room':                   ("in the #belly of a deity#, a spider surrounded by shadows holds", None, 'dungeon'),
-    'Forest Temple Floormaster Chest':                          ("deep in #the forest#, shadows guard a chest containing", "a Floormaster in #Forest Temple# guards", 'dungeon'),
-    'Fire Temple Scarecrow Chest':                              ("high in the #Fire Temple#, Pierre hid", None, 'dungeon'),
-    'Fire Temple Megaton Hammer Chest':                         ("high in the #Fire Temple#, Flare Dancers hid", None, 'dungeon'),
-    'Fire Temple MQ West Tower Top Chest':                      ("high in the #Fire Temple#, Flare Dancers hid", None, 'dungeon'),
-    'GS Fire Temple MQ Above Fire Wall Maze':                   ("high in the #Fire Temple#, a spider holds", None, 'dungeon'),
-    'Water Temple River Chest':                                 ("deep under #the lake#, beyond the currents, hides", "the #Water Temple River Chest# holds", 'dungeon'),
-    'Water Temple Boss Key Chest':                              ("deep under #the lake#, the gilded chest contains", "the #Water Temple Gilded Chest# holds", 'dungeon'),
-    'Water Temple MQ Boss Key Chest':                           ("deep under #the lake#, the gilded chest contains", "the #Water Temple Gilded Chest# holds", 'dungeon'),
-    'Water Temple MQ Freestanding Key':                         ("deep under #the lake#, the apparent key is really", None, 'dungeon'),
-    'GS Water Temple MQ North Basement':                        ("deep under #the lake#, the locked spider holds", None, 'dungeon'),
-    'Gerudo Training Grounds Underwater Silver Rupee Chest':    ("those who seek #sunken silver rupees# will find", None, 'dungeon'),
-    'Gerudo Training Grounds MQ Underwater Silver Rupee Chest': ("those who seek #sunken silver rupees# will find", None, 'dungeon'),
-    'Gerudo Training Grounds Maze Path Final Chest':            ("the final prize of #the thieves\' training# is", None, 'dungeon'),
-    'Gerudo Training Grounds MQ Ice Arrows Chest':              ("the final prize of #the thieves\' training# is", None, 'dungeon'),
-    'Bottom of the Well Defeat Boss':                           ("#Dead Hand# holds", "#Dead Hand# in the well holds", 'dungeon'),
-    'Bottom of the Well MQ Compass Chest':                      ("#Dead Hand# holds", "#Dead Hand# in the well holds", 'dungeon'),
-    'Silver Gauntlets Chest':                                   ("upon the #Colossus's right hand# is", None, 'dungeon'),
-    'Mirror Shield Chest':                                      ("upon the #Colossus's left hand# is", None, 'dungeon'),
-    'Spirit Temple MQ Child Center Chest':                      ("within #the Colossus# a temporal paradox yields", None, 'dungeon'),
-    'Spirit Temple MQ Lower Adult Right Chest':                 ("within #the Colossus# a symphony yields", None, 'dungeon'),
-    'GS Spirit Temple MQ Lower Adult Right':                    ("within #the Colossus# a spider's symphony yields", None, 'dungeon'),
-    'Shadow Temple Hidden Floormaster Chest':                   (["shadows in an #invisible maze# guard", "after a free #boat ride# comes"], None, 'dungeon'),
-    'Shadow Temple MQ Bomb Flower Chest':                       (["shadows in an #invisible maze# guard", "after a free #boat ride# comes"], None, 'dungeon'),
+    'Deku Tree MQ After Spinning Log Chest':                    ("within #a tree#, a temporal stone contains", None, ['dungeon', 'sometimes']),
+    'GS Deku Tree MQ Basement Ceiling':                         ("within #a tree#, a spider on the ceiling holds", None, ['dungeon', 'sometimes']),
+    'Boomerang Chest':                                          ("in the #belly of a deity#, a school of stingers guard", None, 'sometimes'),
+    'GS Jabu Jabu MQ Invisible Enemies Room':                   ("in the #belly of a deity#, a spider surrounded by shadows holds", None, ['dungeon', 'sometimes']),
+    'Forest Temple Floormaster Chest':                          ("deep in #the forest#, shadows guard a chest containing", "a Floormaster in #Forest Temple# guards", ['dungeon', 'sometimes']),
+    'Fire Temple Scarecrow Chest':                              ("high in the #Fire Temple#, Pierre hid", None, ['dungeon', 'sometimes']),
+    'Fire Temple Megaton Hammer Chest':                         ("high in the #Fire Temple#, Flare Dancers hid", None, ['dungeon', 'sometimes']),
+    'Fire Temple MQ West Tower Top Chest':                      ("high in the #Fire Temple#, Flare Dancers hid", None, ['dungeon', 'sometimes']),
+    'GS Fire Temple MQ Above Fire Wall Maze':                   ("high in the #Fire Temple#, a spider holds", None, ['dungeon', 'sometimes']),
+    'Water Temple River Chest':                                 ("deep under #the lake#, beyond the currents, hides", "the #Water Temple River Chest# holds", ['dungeon', 'sometimes']),
+    'Water Temple Boss Key Chest':                              ("deep under #the lake#, the gilded chest contains", "the #Water Temple Gilded Chest# holds", ['dungeon', 'sometimes']),
+    'Water Temple MQ Boss Key Chest':                           ("deep under #the lake#, the gilded chest contains", "the #Water Temple Gilded Chest# holds", ['dungeon', 'sometimes']),
+    'Water Temple MQ Freestanding Key':                         ("deep under #the lake#, the apparent key is really", None, ['dungeon', 'sometimes']),
+    'GS Water Temple MQ North Basement':                        ("deep under #the lake#, the locked spider holds", None, ['dungeon', 'sometimes']),
+    'Gerudo Training Grounds Underwater Silver Rupee Chest':    ("those who seek #sunken silver rupees# will find", None, ['dungeon', 'sometimes']),
+    'Gerudo Training Grounds MQ Underwater Silver Rupee Chest': ("those who seek #sunken silver rupees# will find", None, ['dungeon', 'sometimes']),
+    'Gerudo Training Grounds Maze Path Final Chest':            ("the final prize of #the thieves\' training# is", None, ['dungeon', 'sometimes']),
+    'Gerudo Training Grounds MQ Ice Arrows Chest':              ("the final prize of #the thieves\' training# is", None, ['dungeon', 'sometimes']),
+    'Bottom of the Well Defeat Boss':                           ("#Dead Hand# holds", "#Dead Hand# in the well holds", ['dungeon', 'sometimes']),
+    'Bottom of the Well MQ Compass Chest':                      ("#Dead Hand# holds", "#Dead Hand# in the well holds", ['dungeon', 'sometimes']),
+    'Silver Gauntlets Chest':                                   ("upon the #Colossus's right hand# is", None, ['dungeon', 'sometimes']),
+    'Mirror Shield Chest':                                      ("upon the #Colossus's left hand# is", None, ['dungeon', 'sometimes']),
+    'Spirit Temple MQ Child Center Chest':                      ("within #the Colossus# a temporal paradox yields", None, ['dungeon', 'sometimes']),
+    'Spirit Temple MQ Lower Adult Right Chest':                 ("within #the Colossus# a symphony yields", None, ['dungeon', 'sometimes']),
+    'GS Spirit Temple MQ Lower Adult Right':                    ("within #the Colossus# a spider's symphony yields", None, ['dungeon', 'sometimes']),
+    'Shadow Temple Hidden Floormaster Chest':                   (["shadows in an #invisible maze# guard", "after a free #boat ride# comes"], None, ['dungeon', 'sometimes']),
+    'Shadow Temple MQ Bomb Flower Chest':                       (["shadows in an #invisible maze# guard", "after a free #boat ride# comes"], None, ['dungeon', 'sometimes']),
 
     'Desert Colossus -> Desert Colossus Grotto':                ("lifting a rock in #the desert# reveals", None, 'entrance'),
     'Gerudo Valley -> Gerudo Valley Octorok Grotto':            ("on #a ledge in the valley#, a silver rock hides", None, 'entrance'),
@@ -241,7 +267,7 @@ hintTable = {
     'Hyrule Castle Grounds -> Castle Storms Grotto':            ("a #storm near the castle# reveals", None, 'entrance'),
     'Desert Colossus -> Colossus Fairy':                        ("a fractured wall #in the desert# hides", None, 'entrance'),
     'Ganons Castle Grounds -> Ganons Castle Fairy':             ("a heavy pillar #outside the castle# obstructs", None, 'entrance'),
-    'Death Mountain Crater Lower -> Crater Fairy':              ("using a hammer #in the Crater# opens the path to", None, 'entrance'),
+    'Death Mountain Crater Lower Nearby -> Crater Fairy':       ("using a hammer #in the Crater# opens the path to", None, 'entrance'),
     'Zoras Fountain -> Zoras Fountain Fairy':                   ("a particular wall in #Zora's Fountain# hides", None, 'entrance'),
     'Gerudo Valley Far Side -> Carpenter Tent':                 ("a #tent in the valley# covers", None, 'entrance'),
     'Shadow Temple Warp Region -> Shadow Temple Entryway':      ("at the back of #the Graveyard#, there is", None, 'entrance'),
@@ -283,6 +309,8 @@ hintTable = {
     'Castle Town Bazaar':                                       ("the #Market Bazaar#", None, 'region'),
     'Castle Town Shooting Gallery':                             ("Child Shooting Gallery", None, 'region'),
     'Kakariko Bazaar':                                          ("the #Kakariko Bazaar#", None, 'region'),
+    'Kakariko Potion Shop Front':                               ("the #Kakariko Potion Shop#", None, 'region'),
+    'Kakariko Potion Shop Back':                                ("the #Kakariko Potion Shop#", None, 'region'),
     'Kakariko Shooting Gallery':                                ("Adult Shooting Gallery", None, 'region'),
     'Colossus Fairy':                                           ("a #Great Fairy Fountain#", None, 'region'),
     'Hyrule Castle Fairy':                                      ("a #Great Fairy Fountain#", None, 'region'),
@@ -290,6 +318,10 @@ hintTable = {
     'Crater Fairy':                                             ("a #Great Fairy Fountain#", None, 'region'),
     'Mountain Summit Fairy':                                    ("a #Great Fairy Fountain#", None, 'region'),
     'Zoras Fountain Fairy':                                     ("a #Great Fairy Fountain#", None, 'region'),
+    'Shield Grave':                                             ("a #grave with a free chest#", None, 'region'),
+    'Heart Piece Grave':                                        ("a chest spawned by #Sun's Song#", None, 'region'),
+    'Composer Grave':                                           ("the #Composers' Grave#", None, 'region'),
+    'Dampes Grave':                                             ("Dampe's Grave", None, 'region'),
     'Mountain Bombable Grotto':                                 ("a solitary #Cow#", None, 'region'),
     'Castle Storms Grotto':                                     ("a sandy grotto with #fragile walls#", None, 'region'),
     'Field North Lon Lon Grotto':                               ("a pool guarded by a #Tektite#", None, 'region'),
@@ -440,15 +472,17 @@ def hintExclusions(world, clear_cache=False):
     location_hints = []
     for name in hintTable:
         hint = getHint(name, world.clearer_hints)
-        if hint.type in ['always',
-                         'minigame',
-                         'overworld',
-                         'dungeon',
-                         'song']:
+        if any(item in hint.type for item in 
+                ['always',
+                 'sometimes',
+                 'minigame',
+                 'overworld',
+                 'dungeon',
+                 'song']):
             location_hints.append(hint)
 
     for hint in location_hints:
-        if hint.name not in world_location_names:
+        if hint.name not in world_location_names and hint.name not in hintExclusions.exclusions:
             hintExclusions.exclusions.append(hint.name)
 
     return hintExclusions.exclusions

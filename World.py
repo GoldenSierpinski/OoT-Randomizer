@@ -1,14 +1,15 @@
 from State import State
-from Region import Region
+from Region import Region, TimeOfDay
 from Entrance import Entrance
 from Hints import get_hint_area
 from Location import Location, LocationFactory
 from LocationList import business_scrubs
 from DungeonList import create_dungeons
 from Rules import set_rules, set_shop_rules
-from Item import Item
-from RuleParser import parse_rule_string
+from Item import Item, ItemFactory, MakeEventItem
+from RuleParser import Rule_AST_Transformer
 from SettingsList import get_setting_info
+from HintList import getRequiredHints
 import logging
 import copy
 import io
@@ -18,7 +19,8 @@ import re
 
 class World(object):
 
-    def __init__(self, settings):
+    def __init__(self, id, settings):
+        self.id = id
         self.shuffle = 'vanilla'
         self.dungeons = []
         self.regions = []
@@ -31,32 +33,43 @@ class World(object):
         self.required_locations = []
         self.shop_prices = {}
         self.scrub_prices = {}
+        self.maximum_wallets = 0
         self.light_arrow_location = None
+
+        self.parser = Rule_AST_Transformer(self)
+        self.event_items = set()
 
         # dump settings directly into world's namespace
         # this gives the world an attribute for every setting listed in Settings.py
         self.settings = settings
         self.__dict__.update(settings.__dict__)
-        self.distribution = None
+        self.distribution = settings.distribution.world_dists[id]
 
-        # evaluate settings (important for logic, nice for spoiler)
-        if self.big_poe_count_random:
-            self.big_poe_count = random.randint(1, 10)
-        if self.starting_tod == 'random':
-            setting_info = get_setting_info('starting_tod')
-            choices = [ch for ch in setting_info.choices if ch not in ['default', 'random']]
-            self.starting_tod = random.choice(choices)
-        if self.starting_age == 'random':
-            self.starting_age = random.choice(['child', 'adult'])
+        if self.open_forest == 'closed' and self.entrance_shuffle in ['all-indoors', 'all']:
+            self.open_forest = 'closed_deku'
 
         # rename a few attributes...
-        self.keysanity = self.shuffle_smallkeys != 'dungeon'
+        self.keysanity = self.shuffle_smallkeys in ['keysanity', 'remove']
         self.check_beatable_only = not self.all_reachable
+    
         self.shuffle_dungeon_entrances = self.entrance_shuffle != 'off'
         self.shuffle_grotto_entrances = self.entrance_shuffle in ['simple-indoors', 'all-indoors', 'all']
         self.shuffle_interior_entrances = self.entrance_shuffle in ['simple-indoors', 'all-indoors', 'all']
-        self.shuffle_special_interior_entrances = self.entrance_shuffle in ['all-indoors', 'all']
+        self.shuffle_special_indoor_entrances = self.entrance_shuffle in ['all-indoors', 'all']
         self.shuffle_overworld_entrances = self.entrance_shuffle == 'all'
+
+        self.disable_trade_revert = self.shuffle_interior_entrances or self.shuffle_overworld_entrances
+        self.ensure_tod_access = self.shuffle_interior_entrances or self.shuffle_overworld_entrances
+
+        # Determine LACS Condition
+        if self.shuffle_ganon_bosskey == 'lacs_medallions':
+            self.lacs_condition = 'medallions'
+        elif self.shuffle_ganon_bosskey == 'lacs_dungeons':
+            self.lacs_condition = 'dungeons'
+        elif self.shuffle_ganon_bosskey == 'lacs_stones':
+            self.lacs_condition = 'stones'
+        else:
+            self.lacs_condition = 'vanilla'
 
         # trials that can be skipped will be decided later
         self.skipped_trials = {
@@ -86,9 +99,13 @@ class World(object):
 
         self.can_take_damage = True
 
+        self.resolve_random_settings()
+
+        self.always_hints = [hint.name for hint in getRequiredHints(self)]
+
 
     def copy(self):
-        new_world = World(self.settings)
+        new_world = World(self.id, self.settings)
         new_world.skipped_trials = copy.copy(self.skipped_trials)
         new_world.dungeon_mq = copy.copy(self.dungeon_mq)
         new_world.big_poe_count = copy.copy(self.big_poe_count)
@@ -96,7 +113,7 @@ class World(object):
         new_world.starting_age = self.starting_age
         new_world.can_take_damage = self.can_take_damage
         new_world.shop_prices = copy.copy(self.shop_prices)
-        new_world.id = self.id
+        new_world.maximum_wallets = self.maximum_wallets
         new_world.distribution = self.distribution
 
         new_world.regions = [region.copy(new_world) for region in self.regions]
@@ -108,7 +125,63 @@ class World(object):
         new_world.itempool = [item.copy(new_world) for item in self.itempool]
         new_world.state = self.state.copy(new_world)
 
+        # copy any randomized settings to match the original copy
+        new_world.randomized_list = list(self.randomized_list)
+        for randomized_item in new_world.randomized_list:
+            setattr(new_world, randomized_item, getattr(self, randomized_item))
+
+        new_world.always_hints = list(self.always_hints)
+
         return new_world
+
+
+    def resolve_random_settings(self):
+        # evaluate settings (important for logic, nice for spoiler)
+        self.randomized_list = []
+        if self.big_poe_count_random:
+            self.big_poe_count = random.randint(1, 10)
+            self.randomized_list.append('big_poe_count')
+        if self.starting_tod == 'random':
+            setting_info = get_setting_info('starting_tod')
+            choices = [ch for ch in setting_info.choices if ch not in ['default', 'random']]
+            self.starting_tod = random.choice(choices)
+            self.randomized_list.append('starting_tod')
+        if self.starting_age == 'random':
+            self.starting_age = random.choice(['child', 'adult'])
+            self.randomized_list.append('starting_age')
+        if self.chicken_count_random:
+            self.chicken_count = random.randint(0, 7)
+            self.randomized_list.append('chicken_count')
+
+        # Determine Ganon Trials
+        trial_pool = list(self.skipped_trials)
+        dist_chosen = self.distribution.configure_trials(trial_pool)
+        dist_num_chosen = len(dist_chosen)
+
+        if self.trials_random:
+            self.trials = dist_num_chosen + random.randint(0, len(trial_pool))
+            self.randomized_list.append('trials')
+        num_trials = int(self.trials)
+        choosen_trials = random.sample(trial_pool, num_trials - dist_num_chosen)
+        for trial in self.skipped_trials:
+            if trial not in choosen_trials and trial not in dist_chosen:
+                self.skipped_trials[trial] = True
+
+        # Determine MQ Dungeons
+        dungeon_pool = list(self.dungeon_mq)
+        dist_num_mq = self.distribution.configure_dungeons(self, dungeon_pool)
+
+        if self.mq_dungeons_random:
+            for dungeon in dungeon_pool:
+                self.dungeon_mq[dungeon] = random.choice([True, False])
+            self.mq_dungeons = list(self.dungeon_mq.values()).count(True)
+            self.randomized_list.append('mq_dungeons')
+        else:
+            mqd_picks = random.sample(dungeon_pool, self.mq_dungeons - dist_num_mq)
+            for dung in mqd_picks:
+                self.dungeon_mq[dung] = True
+
+        self.distribution.configure_randomized_settings(self)
 
 
     def load_regions_from_json(self, file_path):
@@ -135,22 +208,43 @@ class World(object):
                 new_region.dungeon = region['dungeon']
             if 'time_passes' in region:
                 new_region.time_passes = region['time_passes']
+                new_region.provides_time = TimeOfDay.ALL
+            if new_region.name == 'Ganons Castle Grounds':
+                new_region.provides_time = TimeOfDay.DAMPE
             if 'locations' in region:
                 for location, rule in region['locations'].items():
                     new_location = LocationFactory(location)
                     new_location.parent_region = new_region
+                    new_location.rule_string = rule
                     if self.logic_rules != 'none':
-                        new_location.access_rule = parse_rule_string(rule, self)
+                        self.parser.parse_spot_rule(new_location)
                     new_location.world = self
                     new_region.locations.append(new_location)
+            if 'events' in region:
+                for event, rule in region['events'].items():
+                    # Allow duplicate placement of events
+                    lname = '%s from %s' % (event, new_region.name)
+                    new_location = Location(lname, type='Event', parent=new_region)
+                    new_location.rule_string = rule
+                    if self.logic_rules != 'none':
+                        self.parser.parse_spot_rule(new_location)
+                    new_location.world = self
+                    new_region.locations.append(new_location)
+                    MakeEventItem(event, new_location)
             if 'exits' in region:
                 for exit, rule in region['exits'].items():
                     new_exit = Entrance('%s -> %s' % (new_region.name, exit), new_region)
                     new_exit.connected_region = exit
+                    new_exit.rule_string = rule
                     if self.logic_rules != 'none':
-                        new_exit.access_rule = parse_rule_string(rule, self)
+                        self.parser.parse_spot_rule(new_exit)
                     new_region.exits.append(new_exit)
             self.regions.append(new_region)
+
+
+    def create_internal_locations(self):
+        self.parser.create_delayed_rules()
+        assert self.parser.events <= self.event_items, 'Parse error: undefined items %r' % (self.parser.events - self.event_items)
 
 
     def initialize_entrances(self):
@@ -221,6 +315,49 @@ class World(object):
                         location.item.price = price
 
 
+    rewardlist = (
+        'Kokiri Emerald',
+        'Goron Ruby',
+        'Zora Sapphire',
+        'Forest Medallion',
+        'Fire Medallion',
+        'Water Medallion',
+        'Spirit Medallion',
+        'Shadow Medallion',
+        'Light Medallion'
+    )
+    boss_location_names = (
+        'Queen Gohma',
+        'King Dodongo',
+        'Barinade',
+        'Phantom Ganon',
+        'Volvagia',
+        'Morpha',
+        'Bongo Bongo',
+        'Twinrova',
+        'Links Pocket'
+    )
+    def fill_bosses(self, bossCount=9):
+        boss_rewards = ItemFactory(self.rewardlist, self)
+        boss_locations = [self.get_location(loc) for loc in self.boss_location_names]
+
+        placed_prizes = [loc.item.name for loc in boss_locations if loc.item is not None]
+        unplaced_prizes = [item for item in boss_rewards if item.name not in placed_prizes]
+        empty_boss_locations = [loc for loc in boss_locations if loc.item is None]
+        prizepool = list(unplaced_prizes)
+        prize_locs = list(empty_boss_locations)
+
+        bossCount -= self.distribution.fill_bosses(self, prize_locs, prizepool)
+
+        while bossCount:
+            bossCount -= 1
+            random.shuffle(prizepool)
+            random.shuffle(prize_locs)
+            item = prizepool.pop()
+            loc = prize_locs.pop()
+            self.push_item(loc, item)
+
+
     def get_region(self, regionname):
         if isinstance(regionname, Region):
             return regionname
@@ -278,7 +415,9 @@ class World(object):
         if self.shuffle_smallkeys == 'dungeon':
             itempool.extend([item for dungeon in self.dungeons for item in dungeon.small_keys])
         if self.shuffle_bosskeys == 'dungeon':
-            itempool.extend([item for dungeon in self.dungeons for item in dungeon.boss_key])
+            itempool.extend([item for dungeon in self.dungeons if dungeon.name != 'Ganons Castle' for item in dungeon.boss_key])
+        if self.shuffle_ganon_bosskey == 'dungeon':
+            itempool.extend([item for dungeon in self.dungeons if dungeon.name == 'Ganons Castle' for item in dungeon.boss_key])
 
         for item in itempool:
             item.world = self
@@ -293,7 +432,9 @@ class World(object):
         if self.shuffle_smallkeys == 'keysanity':
             itempool.extend([item for dungeon in self.dungeons for item in dungeon.small_keys])
         if self.shuffle_bosskeys == 'keysanity':
-            itempool.extend([item for dungeon in self.dungeons for item in dungeon.boss_key])
+            itempool.extend([item for dungeon in self.dungeons if dungeon.name != 'Ganons Castle' for item in dungeon.boss_key])
+        if self.shuffle_ganon_bosskey == 'keysanity':
+            itempool.extend([item for dungeon in self.dungeons if dungeon.name == 'Ganons Castle' for item in dungeon.boss_key])
 
         for item in itempool:
             item.world = self
@@ -336,30 +477,6 @@ class World(object):
         return [location for location in self.get_locations() if location.item is not None]
 
 
-    def get_reachable_locations(self, state=None):
-        if state is None:
-            state = self.state
-        return [location for location in self.get_locations() if state.can_reach(location)]
-
-
-    def get_placeable_locations(self, state=None):
-        if state is None:
-            state = self.state
-        return [location for location in self.get_locations() if location.item is None and state.can_reach(location)]
-
-
-    def unlocks_new_location(self, item):
-        temp_state = self.state.copy()
-        temp_state.clear_cached_unreachable()
-        temp_state.collect(item)
-
-        for location in self.get_unfilled_locations():
-            if temp_state.can_reach(location) and not self.state.can_reach(location):
-                return True
-
-        return False
-
-
     def get_entrances(self):
         return [entrance for region in self.regions for entrance in region.entrances]
 
@@ -394,7 +511,7 @@ class World(object):
             if location_hint in excluded_areas or \
                location.locked or \
                location.item is None or \
-               location.item.type == "Event":
+               location.item.type in ('Event', 'DungeonReward'):
                 continue
 
             area = location_hint
@@ -428,13 +545,14 @@ class World(object):
             'Ice Arrows',
             'Biggoron Sword',
         ]
-        if self.damage_multiplier != 'ohko' and self.damage_multiplier != 'quadruple' and self.shuffle_scrubs == 'off':
+        if (self.damage_multiplier != 'ohko' and self.damage_multiplier != 'quadruple' and 
+            self.shuffle_scrubs == 'off' and not self.shuffle_grotto_entrances):
             # nayru's love may be required to prevent forced damage
             exclude_item_list.append('Nayrus Love')
         if self.hints != 'agony':
             # Stone of Agony only required if it's used for hints
             exclude_item_list.append('Stone of Agony')
-        if not self.shuffle_special_interior_entrances and not self.shuffle_overworld_entrances:
+        if not self.shuffle_special_indoor_entrances and not self.shuffle_overworld_entrances:
             # Serenade and Prelude are never required with vanilla Links House/ToT and overworld entrances
             exclude_item_list.append('Serenade of Water')
             exclude_item_list.append('Prelude of Light')
@@ -504,6 +622,9 @@ class World(object):
                     # The max number of requred Big Poe Bottles is based on the setting
                     dupe_locations = duplicate_item_woth[world_id].get(item.name, [])
                     max_progressive = self.settings.big_poe_count
+                elif item.name == 'Progressive Wallet':
+                    dupe_locations = duplicate_item_woth[world_id].get(item.name, [])
+                    max_progressive = self.maximum_wallets
                 else:
                     dupe_locations = duplicate_item_woth[world_id].get(item.name, [])
                     max_progressive = item.special.get('progressive', 1)

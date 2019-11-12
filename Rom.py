@@ -1,4 +1,5 @@
 import io
+import itertools
 import json
 import logging
 import os
@@ -8,7 +9,8 @@ import subprocess
 import random
 import copy
 from Utils import is_bundled, subprocess_args, local_path, data_path, default_output_path, get_version_bytes
-from ntype import BigStream
+from ntype import BigStream, uint32
+from crc import calculate_crc
 from version import __version__
 
 DMADATA_START = 0x7430
@@ -26,7 +28,7 @@ class Rom(BigStream):
         if file is None:
             return
 
-        decomp_file = 'ZOOTDEC.z64'
+        decomp_file = local_path('ZOOTDEC.z64')
 
         os.chdir(local_path())
 
@@ -114,6 +116,11 @@ class Rom(BigStream):
         self.changed_address[self.last_address-1] = value
 
 
+    def write_bytes(self, address, values):
+        super().write_bytes(address, values)
+        self.changed_address.update(zip(range(address, address+len(values)), values))
+
+
     def restore(self):
         self.buffer = copy.copy(self.original.buffer)
         self.changed_address = {}
@@ -128,48 +135,15 @@ class Rom(BigStream):
 
     def write_to_file(self, file):
         self.verify_dmadata()
-        self.update_crc()
+        self.update_header()
         with open(file, 'wb') as outfile:
             outfile.write(self.buffer)
 
 
-    def update_rom_title(self):
+    def update_header(self):
         self.write_bytes(0x35, get_version_bytes(__version__))
-
-
-    def update_crc(self):
-        self.update_rom_title()
-
-        t1 = t2 = t3 = t4 = t5 = t6 = 0xDF26F436
-        u32 = 0xFFFFFFFF
-
-        words  = list(map(self.read_int32, range(0x1000, 0x101000, 4)))
-        words2 = list(map(self.read_int32, range(0x750,  0x850,    4)))
-
-        for cur, d in enumerate(words):
-            if ((t6 + d) & u32) < t6:
-                t4 += 1
-
-            t6 = (t6+d) & u32
-            t3 ^= d
-            shift = d & 0x1F
-            r = ((d << shift) | (d >> (32 - shift))) & u32
-            t5 = (t5 + r) & u32
-
-            if t2 > d:
-                t2 ^= r
-            else:
-                t2 ^= t6 ^ d
-
-            data2 = words2[cur & 0x3F]
-            t1 += data2 ^ d
-            t1 &= u32
-
-        crc0 = t6 ^ t4 ^ t3
-        crc1 = t5 ^ t2 ^ t1
-
-        # Finally write the crc back to the rom
-        self.write_int32s(0x10, [crc0, crc1])
+        crc = calculate_crc(self)
+        self.write_int32s(0x10, [crc[0], crc[1]])
 
 
     def read_rom(self, file):
@@ -233,7 +207,8 @@ class Rom(BigStream):
                 '\n-------------------------------------\n'.join(overlapping_records))
 
 
-    # if key is not found, then add an entry
+    # update dmadata record with start vrom address "key"
+    # if key is not found, then attempt to add a new dmadata entry
     def update_dmadata_record(self, key, start, end, from_file=None):
         cur, dma_data_end = self.get_dma_table_range()
         dma_index = 0
@@ -310,4 +285,5 @@ class Rom(BigStream):
 
             max_end = max(max_end, this_end)
             cur += 0x10
+        max_end = ((max_end + 0x0F) >> 4) << 4
         return max_end

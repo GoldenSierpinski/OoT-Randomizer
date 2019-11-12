@@ -1,3 +1,6 @@
+from Region import TimeOfDay
+
+
 class Entrance(object):
 
     def __init__(self, name='', parent=None):
@@ -5,9 +8,8 @@ class Entrance(object):
         self.parent_region = parent
         self.world = parent.world
         self.connected_region = None
-        self.spot_type = 'Entrance'
-        self.recursion_count = { 'child': 0, 'adult': 0 }
-        self.access_rule = lambda state: True
+        self.access_rule = lambda state, **kwargs: True
+        self.access_rules = []
         self.reverse = None
         self.replaces = None
         self.assumed = None
@@ -20,8 +22,8 @@ class Entrance(object):
     def copy(self, new_region):
         new_entrance = Entrance(self.name, new_region)
         new_entrance.connected_region = self.connected_region.name
-        new_entrance.spot_type = self.spot_type
         new_entrance.access_rule = self.access_rule
+        new_entrance.access_rules = list(self.access_rules)
         new_entrance.reverse = self.reverse
         new_entrance.replaces = self.replaces
         new_entrance.assumed = self.assumed
@@ -33,8 +35,14 @@ class Entrance(object):
         return new_entrance
 
 
-    def can_reach(self, state, noparent=False):
-        return state.with_spot(self.access_rule, spot=self) and (noparent or state.can_reach(self.parent_region, keep_tod=True))
+    def add_rule(self, lambda_rule):
+        self.access_rules.append(lambda_rule)
+        self.access_rule = lambda state, **kwargs: all(rule(state, **kwargs) for rule in self.access_rules)
+
+
+    def set_rule(self, lambda_rule):
+        self.access_rule = lambda_rule
+        self.access_rules = [lambda_rule]
 
 
     def connect(self, region):
