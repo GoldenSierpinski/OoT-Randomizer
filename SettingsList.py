@@ -1342,12 +1342,27 @@ setting_infos = [
             'randomize_key': 'randomize_settings',
         },
     ),
-    Checkbutton(
-        name           = 'open_fountain',
-        gui_text       = 'Open Zora\'s Fountain',
+    Combobox(
+        name           = 'zora_fountain',
+        gui_text       = 'Zora\'s Fountain',
+        default        = 'closed',
+        choices        = {
+            'closed': 'Default Behavior (Closed)',
+            'adult':  'Open For Adult',
+            'open':   'Always Open',
+        },
         gui_tooltip    = '''\
-            King Zora starts out as moved. This also removes
-            Ruto's Letter from the item pool.
+            'Default Behavior': King Zora obstructs the way to
+            Zora's Fountain. Ruto's Letter must be shown as
+            child in order to move him for both eras.
+
+            'Open For Adult': King Zora is always moved in 
+            the adult era. This means Ruto's Letter is only
+            required to access Zora's Fountain as child.
+
+            'Always Open': King Zora starts as moved in
+            both the child and adult eras. This also removes 
+            Ruto's Letter from the pool since it can't be used.
         ''',
         shared         = True,
         gui_params     = {
@@ -1414,6 +1429,50 @@ setting_infos = [
                 ('medallions', 1),
                 ('dungeons',   1),
             ],
+        },
+    ),
+    Checkbutton(
+        name           = 'triforce_hunt',
+        gui_text       = 'Triforce Hunt',
+        gui_tooltip    = '''\
+            Pieces of the Triforce have been scattered around the world. 
+            Find some of them to beat the game.
+
+            Game is saved on completion, and Ganon's Castle key is given
+            if beating the game again is desired.
+        ''',
+        shared         = True,
+        gui_params     = {
+            'randomize_key': 'randomize_settings',
+        },
+        disable        = {
+            True  : {'settings' : ['shuffle_ganon_bosskey']},
+            False : {'settings' : ['triforce_goal_per_world']}
+        },
+    ),    
+    Scale(
+        name           = 'triforce_goal_per_world',
+        gui_text       = 'Required Triforces Per World',
+        default        = 20,
+        min            = 1,
+        max            = 100,
+        shared         = True,
+        gui_tooltip    = '''\
+            Select the amount of Triforce Pieces required to beat the game.
+
+            In multiworld, each world will have the same number of triforces 
+            in them. The required ammount will be per world collectively. 
+            For example, if this is set to 20 in a 2 player multiworld, players 
+            need 40 total, but one player could obtain 30 and the other 10. 
+
+            Extra pieces are determined by the the Item Pool setting:
+            'Plentiful': 100% Extra
+            'Balanced': 50% Extra
+            'Scarce': 25% Extra
+            'Minimal: No Extra
+        ''',
+        gui_params     = {
+            "hide_when_disabled": True,
         },
     ),
     Scale(
@@ -2114,6 +2173,7 @@ setting_infos = [
         name           = 'shuffle_ganon_bosskey',
         gui_text       = 'Ganon\'s Boss Key',
         default        = 'dungeon',
+        disabled_default = 'triforce',
         choices        = {
             'remove':          "Remove (Keysy)",
             'vanilla':         "Vanilla Location",
@@ -2145,7 +2205,6 @@ setting_infos = [
             'On LACS: Medallions': All 6 Medallions.
             'On LACS: Stones': All 3 Spiritual Stones.
             'On LACS: Dungeons': All Spiritual Stones & Medallions.
-            
         ''',
         shared         = True,
         gui_params     = {
@@ -2500,24 +2559,22 @@ setting_infos = [
         gui_text       = 'Starting Time of Day',
         default        = 'default',
         choices        = {
-            'default':       'Default',
+            'default':       'Default (10:00)',
             'random':        'Random Choice',
-            'sunrise':       'Sunrise',
-            'morning':       'Morning',
-            'noon':          'Noon',
-            'afternoon':     'Afternoon',
-            'sunset':        'Sunset',
-            'evening':       'Evening',
-            'midnight':      'Midnight',
-            'witching-hour': 'Witching Hour',
+            'sunrise':       'Sunrise (6:30)',
+            'morning':       'Morning (9:00)',
+            'noon':          'Noon (12:00)',
+            'afternoon':     'Afternoon (15:00)',
+            'sunset':        'Sunset (18:00)',
+            'evening':       'Evening (21:00)',
+            'midnight':      'Midnight (00:00)',
+            'witching-hour': 'Witching Hour (03:00)',
         },
         gui_tooltip    = '''\
             Change up Link's sleep routine.
 
             Daytime officially starts at 6:30,
             nighttime at 18:00 (6:00 PM).
-
-            Default is 10:00 in the morning.
         ''',
         shared         = True,
     ),

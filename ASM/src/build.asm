@@ -66,6 +66,7 @@ RANDO_CONTEXT:
 .include "bunny_hood.asm"
 .include "magic_color.asm"
 .include "debug.asm"
+.include "extended_objects.asm"
 .include "cow.asm"
 .include "lake_hylia.asm"
 .include "timers.asm"
@@ -75,12 +76,15 @@ RANDO_CONTEXT:
 .include "grotto.asm"
 .include "deku_mouth_condition.asm"
 .include "audio.asm"
+.include "king_zora.asm"
 .importobj "../build/bundle.o"
 .align 8
 FONT_TEXTURE:
 .incbin("../resources/font.bin")
 DPAD_TEXTURE:
 .incbin("../resources/dpad.bin")
+TRIFORCE_ICON_TEXTURE:
+.incbin("../resources/triforce_sprite.bin")
 
 .align 0x10
 PAYLOAD_END:
